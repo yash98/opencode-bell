@@ -21,7 +21,7 @@ const DEBOUNCE_MS = parsedDebounce > 0 ? parsedDebounce : 1200
  * Listens for configured events and writes ASCII BEL to the terminal.
  * Same key only rings once within the debounce window.
  */
-export const OpencodeBellPlugin = async () => {
+export const OpencodeBellPlugin = async ({ $ }) => {
   const messages = {
     "permission.asked": "OpenCode permission requested",
     "question.asked": "OpenCode question asked",
@@ -30,6 +30,14 @@ export const OpencodeBellPlugin = async () => {
   }
   // Map<key, lastRingTimestamp> — tracks last ring time per key
   const last = new Map()
+
+  const writeTty = (path, seq) => {
+    try {
+      const fd = openSync(path, "w")
+      writeSync(fd, seq)
+      closeSync(fd)
+    } catch {}
+  }
 
   /**
    * ring — debounced bell for a given key.
@@ -40,20 +48,26 @@ export const OpencodeBellPlugin = async () => {
     const prev = last.get(key) || 0
     if (now - prev < DEBOUNCE_MS) return
     last.set(key, now)
-    // Wrap sequences in tmux passthrough so they escape to the outer terminal
-    const wrap = (seq) =>
-      process.env.TMUX ? `\x1bPtmux;${seq.replace(/\x1b/g, "\x1b\x1b")}\x1b\\` : seq
-    // Write to the controlling terminal (/dev/tty), not process.stdout —
-    // stdout isn't the user's tmux client TTY, so unfocused windows miss the bell
-    const emit = (seq) => {
+    const seqs = []
+    if (ENABLED_OUTPUTS.has("osc")) seqs.push(`\x1b]9;${message}\x07`)
+    if (ENABLED_OUTPUTS.has("bell")) seqs.push("\x07")
+    if (!seqs.length) return
+    // In tmux, write the BEL directly to each connected client TTY — the
+    // server process has no TTY of its own, so its stdout/tty doesn't reach
+    // the user's terminal. Fire-and-forget: never block the event bus.
+    ;(async () => {
       try {
-        const fd = openSync("/dev/tty", "w")
-        writeSync(fd, seq)
-        closeSync(fd)
+        if (process.env.TMUX && $) {
+          const res = await $`tmux list-clients -F '#{client_tty}'`.quiet().nothrow()
+          const ttys = res.stdout.toString().trim().split("\n").filter(Boolean)
+          if (ttys.length) {
+            for (const t of ttys) writeTty(t, seqs.join(""))
+            return
+          }
+        }
+        writeTty("/dev/tty", seqs.join(""))
       } catch {}
-    }
-    if (ENABLED_OUTPUTS.has("osc")) emit(wrap(`\x1b]9;${message}\x07`))
-    if (ENABLED_OUTPUTS.has("bell")) emit(wrap("\x07"))
+    })()
   }
 
   return {
