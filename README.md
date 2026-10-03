@@ -39,4 +39,4 @@ export OPENCODE_BELL_OUTPUTS="bell,osc"                   # bell and/or desktop 
 export OPENCODE_BELL_DEBOUNCE=1200                        # debounce window, ms
 ```
 
-Valid events: `permission.asked`, `session.idle`, `session.error`.
+Valid events: `permission.asked`, `question.asked`, `session.idle`, `session.error`.

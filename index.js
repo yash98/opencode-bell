@@ -1,5 +1,5 @@
-// Event types that trigger the bell, comma-separated. Defaults to all three.
-const DEFAULT_EVENTS = "permission.asked,session.idle,session.error"
+// Event types that trigger the bell, comma-separated. Defaults to all four.
+const DEFAULT_EVENTS = "permission.asked,question.asked,session.idle,session.error"
 // Empty string or whitespace-only also falls back to defaults
 const rawEvents = process.env.OPENCODE_BELL_EVENTS || DEFAULT_EVENTS
 const parsed = rawEvents.split(",").map((s) => s.trim()).filter(Boolean)
@@ -23,6 +23,7 @@ const DEBOUNCE_MS = parsedDebounce > 0 ? parsedDebounce : 1200
 export const OpencodeBellPlugin = async () => {
   const messages = {
     "permission.asked": "OpenCode permission requested",
+    "question.asked": "OpenCode question asked",
     "session.idle": "OpenCode session idle",
     "session.error": "OpenCode session error",
   }
@@ -51,10 +52,19 @@ export const OpencodeBellPlugin = async () => {
     event: async ({ event }) => {
       // Only handle events in the configured set, silently skip the rest
       if (!ENABLED_EVENTS.has(event?.type)) return
+      if (event.type === "question.asked") {
+        ring(`question:${event.properties?.sessionID}`, messages["question.asked"])
+        return
+      }
       const sessionId = event?.properties?.sessionID
       // Use "type:id" when sessionId exists, plain "type" when missing (no trailing colon)
       const key = sessionId ? `${event.type}:${sessionId}` : event.type
       ring(key, messages[event.type])
+    },
+    // Fallback path: question.asked is published inside the tool body, so also
+    // ring on the tool hook. Fire-and-forget — never block the tool hook.
+    "tool.execute.before": (input) => {
+      if (input.tool === "question") ring(`tool:question:${input.sessionID}`, messages["question.asked"])
     },
     // Exposed for testing
     _ring: (key, now) => ring(key, undefined, now),
