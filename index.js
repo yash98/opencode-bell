@@ -21,7 +21,6 @@ const DEBOUNCE_MS = parsedDebounce > 0 ? parsedDebounce : 1200
  * Same key only rings once within the debounce window.
  */
 export const OpencodeBellPlugin = async () => {
-  const bell = "\x07"
   const messages = {
     "permission.asked": "OpenCode permission requested",
     "session.idle": "OpenCode session idle",
@@ -40,8 +39,11 @@ export const OpencodeBellPlugin = async () => {
     if (now - prev < DEBOUNCE_MS) return
     last.set(key, now)
     if (process.stdout && process.stdout.isTTY) {
-      if (ENABLED_OUTPUTS.has("osc")) process.stdout.write(`\x1b]9;${message}\x07`)
-      if (ENABLED_OUTPUTS.has("bell")) process.stdout.write(bell)
+      // Wrap sequences in tmux passthrough so they escape to the outer terminal
+      const wrap = (seq) =>
+        process.env.TMUX ? `\x1bPtmux;${seq.replace(/\x1b/g, "\x1b\x1b")}\x1b\\` : seq
+      if (ENABLED_OUTPUTS.has("osc")) process.stdout.write(wrap(`\x1b]9;${message}\x07`))
+      if (ENABLED_OUTPUTS.has("bell")) process.stdout.write(wrap("\x07"))
     }
   }
 
