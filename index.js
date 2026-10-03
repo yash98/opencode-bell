@@ -1,3 +1,4 @@
+import { openSync, writeSync, closeSync } from "node:fs"
 // Event types that trigger the bell, comma-separated. Defaults to all four.
 const DEFAULT_EVENTS = "permission.asked,question.asked,session.idle,session.error"
 // Empty string or whitespace-only also falls back to defaults
@@ -39,13 +40,20 @@ export const OpencodeBellPlugin = async () => {
     const prev = last.get(key) || 0
     if (now - prev < DEBOUNCE_MS) return
     last.set(key, now)
-    if (process.stdout && process.stdout.isTTY) {
-      // Wrap sequences in tmux passthrough so they escape to the outer terminal
-      const wrap = (seq) =>
-        process.env.TMUX ? `\x1bPtmux;${seq.replace(/\x1b/g, "\x1b\x1b")}\x1b\\` : seq
-      if (ENABLED_OUTPUTS.has("osc")) process.stdout.write(wrap(`\x1b]9;${message}\x07`))
-      if (ENABLED_OUTPUTS.has("bell")) process.stdout.write(wrap("\x07"))
+    // Wrap sequences in tmux passthrough so they escape to the outer terminal
+    const wrap = (seq) =>
+      process.env.TMUX ? `\x1bPtmux;${seq.replace(/\x1b/g, "\x1b\x1b")}\x1b\\` : seq
+    // Write to the controlling terminal (/dev/tty), not process.stdout —
+    // stdout isn't the user's tmux client TTY, so unfocused windows miss the bell
+    const emit = (seq) => {
+      try {
+        const fd = openSync("/dev/tty", "w")
+        writeSync(fd, seq)
+        closeSync(fd)
+      } catch {}
     }
+    if (ENABLED_OUTPUTS.has("osc")) emit(wrap(`\x1b]9;${message}\x07`))
+    if (ENABLED_OUTPUTS.has("bell")) emit(wrap("\x07"))
   }
 
   return {
