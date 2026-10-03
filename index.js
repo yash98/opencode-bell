@@ -1,4 +1,5 @@
 import { openSync, writeSync, closeSync } from "node:fs"
+import { execSync } from "child_process"
 // Event types that trigger the bell, comma-separated. Defaults to all four.
 const DEFAULT_EVENTS = "permission.asked,question.asked,session.idle,session.error"
 // Empty string or whitespace-only also falls back to defaults
@@ -39,6 +40,64 @@ export const OpencodeBellPlugin = async ({ $ }) => {
     } catch {}
   }
 
+  // True when the tmux pane running opencode is attached, its window is the
+  // active one in the session, and the pane is active — i.e. the user is
+  // looking at it. Unknown (null) when not in tmux or the probe fails.
+  const isTmuxPaneFocused = () => {
+    const pane = process.env.TMUX_PANE
+    if (!pane) return null
+    try {
+      const out = execSync(
+        `tmux display-message -t '${pane}' -p '#{session_attached} #{window_active} #{pane_active}'`,
+        { timeout: 500, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+      ).trim()
+      const [session, window, paneActive] = out.split(" ")
+      return Number(session) > 0 && window === "1" && paneActive === "1"
+    } catch {
+      return null
+    }
+  }
+
+  // Flip window-status-style to red on opencode's tmux window and restore it
+  // after a few seconds — emulates the bell styling tmux can't apply to a
+  // BEL written from outside a pane.
+  const markTmuxWindow = () => {
+    const pane = process.env.TMUX_PANE
+    if (!pane) return
+    try {
+      const target = execSync(
+        `tmux display-message -t '${pane}' -p '#{session_name}:#{window_index}'`,
+        { timeout: 500, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+      ).trim()
+      if (!target) return
+      // Reuse the user's configured window-status-bell-style so the flip
+      // matches their theme; fall back to plain red.
+      const bellStyle =
+        execSync(`tmux show-option -gwpv -t '${target}' window-status-bell-style`, {
+          timeout: 500,
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim() || "bg=colour1,fg=white"
+      const saved = execSync(`tmux show-option -wpv -t '${target}' window-status-style`, {
+        timeout: 500,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim()
+      execSync(`tmux set-option -w -t '${target}' window-status-style '${bellStyle}'`, {
+        timeout: 500,
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+      setTimeout(() => {
+        try {
+          execSync(saved ? `tmux set-option -w -t '${target}' window-status-style '${saved}'` : `tmux set-option -uw -t '${target}' window-status-style`, {
+            timeout: 500,
+            stdio: ["ignore", "pipe", "ignore"],
+          })
+        } catch {}
+      }, 5000)
+    } catch {}
+  }
+
   /**
    * ring — debounced bell for a given key.
    * @param {string} key - debounce key, format "event.type:sessionId" or "event.type"
@@ -48,6 +107,9 @@ export const OpencodeBellPlugin = async ({ $ }) => {
     const prev = last.get(key) || 0
     if (now - prev < DEBOUNCE_MS) return
     last.set(key, now)
+    // Skip when the user is looking at the pane
+    if (isTmuxPaneFocused() === true) return
+    markTmuxWindow()
     const seqs = []
     if (ENABLED_OUTPUTS.has("osc")) seqs.push(`\x1b]9;${message}\x07`)
     if (ENABLED_OUTPUTS.has("bell")) seqs.push("\x07")
